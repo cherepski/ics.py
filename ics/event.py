@@ -10,7 +10,6 @@ import arrow
 import copy
 from datetime import timedelta
 
-from .alarm import AlarmFactory
 from .component import Component
 from .utils import (
     parse_duration,
@@ -19,7 +18,6 @@ from .utils import (
     iso_precision,
     get_arrow,
     arrow_to_iso,
-    arrow_date_to_iso,
     uid_gen,
     unescape_string,
     escape_string,
@@ -32,7 +30,7 @@ class Event(Component):
     """A calendar event.
 
     Can be full-day or between two instants.
-    Can be defined by a beginning instant and
+    Can be defined by a beginning instant and\
     a duration *or* end instant.
     """
 
@@ -47,25 +45,22 @@ class Event(Component):
                  duration=None,
                  uid=None,
                  description=None,
+                 x_alt_desc=None,
+                 organizer=None,
                  created=None,
-                 location=None,
-                 url=None,
-                 transparent=False,
-                 alarms=None):
-        """Instantiates a new :class:`ics.event.Event`.
+                 location=None):
+        """Instanciates a new :class:`ics.event.Event`.
 
         Args:
-            name (string) : rfc5545 SUMMARY property
+            name (string)
             begin (Arrow-compatible)
             end (Arrow-compatible)
             duration (datetime.timedelta)
             uid (string): must be unique
             description (string)
+            x-alt-desc (string: html compliant)
             created (Arrow-compatible)
             location (string)
-            url (string)
-            transparent (Boolean)
-            alarms (:class:`ics.alarm.Alarm`)
 
         Raises:
             ValueError: if `end` and `duration` are specified at the same time
@@ -77,16 +72,15 @@ class Event(Component):
         self._begin_precision = None
         self.uid = uid_gen() if not uid else uid
         self.description = description
+        self.x_alt_desc = x_alt_desc
+        self.organizer = organizer
         self.created = get_arrow(created)
         self.location = location
-        self.url = url
-        self.transparent = transparent
-        self.alarms = set()
         self._unused = Container(name='VEVENT')
 
         self.name = name
         self.begin = begin
-        # TODO: DRY [1]
+        #TODO: DRY [1]
         if duration and end:
             raise ValueError(
                 'Event() may not specify an end and a duration \
@@ -95,9 +89,6 @@ class Event(Component):
             self.end = end
         elif duration:  # Duration was specified
             self.duration = duration
-
-        if alarms is not None:
-            self.alarms.update(set(alarms))
 
     def has_end(self):
         """
@@ -142,16 +133,10 @@ class Event(Component):
             # return the beginning + duration
             return self.begin + self._duration
         elif self._end_time:  # if end is time defined
-            if self.all_day:
-                return self._end_time + timedelta(days=1)
-            else:
-                return self._end_time
+            return self._end_time
         elif self._begin:  # if end is not defined
-            if self.all_day:
-                return self._begin + timedelta(days=1)
-            else:
-                # instant event
-                return self._begin
+            # return beginning + precision
+            return self.begin.replace(**{self._begin_precision + 's': +1})
         else:
             return None
 
@@ -178,10 +163,8 @@ class Event(Component):
         if self._duration:
             return self._duration
         elif self.end:
-            # because of the clever getter for end, this also takes care of all_day events
             return self.end - self.begin
         else:
-            # event has neither start, nor end, nor duration
             return None
 
     @duration.setter
@@ -204,30 +187,17 @@ class Event(Component):
         Return:
             bool: self is an all-day event
         """
-        # the event may have an end, also given in 'day' precision
-        return self._begin_precision == 'day'
+        return self._begin_precision == 'day' and not self.has_end()
 
     def make_all_day(self):
         """Transforms self to an all-day event.
 
-        The event will span all the days from the begin to the end day.
+        The day will be the day of self.begin.
         """
-        was_instant = self.duration == timedelta(0)
-        old_end = self.end
-        self._duration = None
         self._begin_precision = 'day'
         self._begin = self._begin.floor('day')
-        if was_instant:
-            self._end_time = None
-            return
-        floored_end = old_end.floor('day')
-        # this "overflooring" must be done because end times are not included in the interval
-        calculated_end = floored_end - timedelta(days=1) if floored_end == old_end else floored_end
-        if calculated_end == self._begin:
-            # for a one day event, we don't need to save the _end_time
-            self._end_time = None
-        else:
-            self._end_time = calculated_end
+        self._duration = None
+        self._end_time = None
 
     def __urepr__(self):
         """Should not be used directly. Use self.__repr__ instead.
@@ -237,10 +207,7 @@ class Event(Component):
         """
         name = "'{}' ".format(self.name) if self.name else ''
         if self.all_day:
-            if not self._end_time or self._begin == self._end_time:
-                return "<all-day Event {}{}>".format(name, self.begin.strftime("%F"))
-            else:
-                return "<all-day Event {}begin:{} end:{}>".format(name, self._begin.strftime("%F"), self._end_time.strftime("%F"))
+            return "<all-day Event {}{}>".format(name, self.begin.strftime("%F"))
         elif self.begin is None:
             return "<Event '{}'>".format(self.name) if self.name else "<Event>"
         else:
@@ -310,19 +277,19 @@ class Event(Component):
             Event: an exact copy of self"""
         clone = copy.copy(self)
         clone._unused = clone._unused.clone()
-        clone.alarms = copy.copy(self.alarms)
         return clone
 
     def __hash__(self):
         """
         Returns:
             int: hash of self. Based on self.uid."""
-        return int(''.join(map(lambda x: '%.3d' % ord(x), self.uid)))
+        ord3 = lambda x: '%.3d' % ord(x)
+        return int(''.join(map(ord3, self.uid)))
 
 
-# ------------------
-# ----- Inputs -----
-# ------------------
+######################
+####### Inputs #######
+
 @Event._extracts('DTSTAMP')
 def created(event, line):
     if line:
@@ -358,7 +325,6 @@ def end(event, line):
         # get the dict of vtimezones passed to the classmethod
         tz_dict = event._classmethod_kwargs['tz']
         event._end_time = iso_to_arrow(line, tz_dict)
-        # one could also save the end_precision to check that if begin_precision is day, end_precision also is
 
 
 @Event._extracts('SUMMARY')
@@ -370,21 +336,17 @@ def summary(event, line):
 def description(event, line):
     event.description = unescape_string(line.value) if line else None
 
+@Event._extracts('X-ALT-DESC')
+def x_alt_desc(event, line):
+    event.x_alt_desc = unescape_string(line.value) if line else None
+
+@Event._extracts('ORGANIZER')
+def organizer(event, line):
+    event.organizer = unescape_string(line.value) if line else None
 
 @Event._extracts('LOCATION')
 def location(event, line):
     event.location = unescape_string(line.value) if line else None
-
-
-@Event._extracts('URL')
-def url(event, line):
-    event.url = unescape_string(line.value) if line else None
-
-
-@Event._extracts('TRANSP')
-def transparent(event, line):
-    if line:
-        event.transparent = line.value == 'TRANSPARENT'
 
 
 # TODO : make uid required ?
@@ -395,18 +357,8 @@ def uid(event, line):
         event.uid = line.value
 
 
-@Event._extracts('VALARM', multiple=True)
-def alarms(event, lines):
-    def alarm_factory(x):
-        af = AlarmFactory.get_type_from_container(x)
-        return af._from_container(x)
-
-    event.alarms = list(map(alarm_factory, lines))
-
-
-# -------------------
-# ----- Outputs -----
-# -------------------
+######################
+###### Outputs #######
 @Event._outputs
 def o_created(event, container):
     if event.created:
@@ -419,15 +371,11 @@ def o_created(event, container):
 
 @Event._outputs
 def o_start(event, container):
-    if event.begin and not event.all_day:
-        container.append(ContentLine('DTSTART', value=arrow_to_iso(event.begin)))
+    if event.begin:
+        container.append(
+            ContentLine('DTSTART', value=arrow_to_iso(event.begin)))
 
-
-@Event._outputs
-def o_all_day(event, container):
-    if event.begin and event.all_day:
-        container.append(ContentLine('DTSTART', params={'VALUE': ('DATE',)},
-                                     value=arrow_date_to_iso(event.begin)))
+    # TODO : take care of precision
 
 
 @Event._outputs
@@ -455,25 +403,20 @@ def o_description(event, container):
     if event.description:
         container.append(ContentLine('DESCRIPTION', value=escape_string(event.description)))
 
+@Event._outputs
+def o_x_alt_desc(event, container):
+    if event.x_alt_desc:
+        container.append(ContentLine('X-ALT-DESC;FMTTYPE=text/html', value=escape_string(event.x_alt_desc)))
+
+@Event._outputs
+def o_organizer(event, container):
+    if event.organizer:
+        container.append(ContentLine('ORGANIZER;CN="Shire Eye"', value=escape_string(event.organizer)))
 
 @Event._outputs
 def o_location(event, container):
     if event.location:
         container.append(ContentLine('LOCATION', value=escape_string(event.location)))
-
-
-@Event._outputs
-def o_url(event, container):
-    if event.url:
-        container.append(ContentLine('URL', value=escape_string(event.url)))
-
-
-@Event._outputs
-def o_transparent(event, container):
-    if event.transparent:
-        container.append(ContentLine('TRANSP', value=escape_string('TRANSPARENT')))
-    else:
-        container.append(ContentLine('TRANSP', value=escape_string('OPAQUE')))
 
 
 @Event._outputs
@@ -484,9 +427,3 @@ def o_uid(event, container):
         uid = uid_gen()
 
     container.append(ContentLine('UID', value=uid))
-
-
-@Event._outputs
-def o_alarm(event, container):
-    for alarm in event.alarms:
-        container.append(str(alarm))
