@@ -93,7 +93,7 @@ class Calendar(Component):
             >>> c = Calendar(); c.append(Event(name="My cool event"))
             >>> open('my.ics', 'w').writelines(c)
         """
-        for line in str(self).split('\n'):
+        for line in str(self).decode("utf-8").split('\n'):
             l = line + '\n'
             if PY2:
                 l = l.encode('utf-8')

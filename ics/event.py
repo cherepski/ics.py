@@ -45,6 +45,8 @@ class Event(Component):
                  duration=None,
                  uid=None,
                  description=None,
+                 x_alt_desc=None,
+                 organizer=None,
                  created=None,
                  location=None):
         """Instanciates a new :class:`ics.event.Event`.
@@ -56,6 +58,7 @@ class Event(Component):
             duration (datetime.timedelta)
             uid (string): must be unique
             description (string)
+            x-alt-desc (string: html compliant)
             created (Arrow-compatible)
             location (string)
 
@@ -69,6 +72,8 @@ class Event(Component):
         self._begin_precision = None
         self.uid = uid_gen() if not uid else uid
         self.description = description
+        self.x_alt_desc = x_alt_desc
+        self.organizer = organizer
         self.created = get_arrow(created)
         self.location = location
         self._unused = Container(name='VEVENT')
@@ -331,6 +336,13 @@ def summary(event, line):
 def description(event, line):
     event.description = unescape_string(line.value) if line else None
 
+@Event._extracts('X-ALT-DESC')
+def x_alt_desc(event, line):
+    event.x_alt_desc = unescape_string(line.value) if line else None
+
+@Event._extracts('ORGANIZER')
+def organizer(event, line):
+    event.organizer = unescape_string(line.value) if line else None
 
 @Event._extracts('LOCATION')
 def location(event, line):
@@ -391,6 +403,15 @@ def o_description(event, container):
     if event.description:
         container.append(ContentLine('DESCRIPTION', value=escape_string(event.description)))
 
+@Event._outputs
+def o_x_alt_desc(event, container):
+    if event.x_alt_desc:
+        container.append(ContentLine('X-ALT-DESC;FMTTYPE=text/html', value=escape_string(event.x_alt_desc)))
+
+@Event._outputs
+def o_organizer(event, container):
+    if event.organizer:
+        container.append(ContentLine('ORGANIZER;CN="Shire Eye"', value=escape_string(event.organizer)))
 
 @Event._outputs
 def o_location(event, container):
