@@ -411,7 +411,7 @@ def o_x_alt_desc(event, container):
 @Event._outputs
 def o_organizer(event, container):
     if event.organizer:
-        container.append(ContentLine('ORGANIZER;CN="Shire Eye"', value=escape_string(event.organizer)))
+        container.append(ContentLine('ORGANIZER;CN="The Eye"', value=escape_string(event.organizer)))
 
 @Event._outputs
 def o_location(event, container):
